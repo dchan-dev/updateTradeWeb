@@ -190,7 +190,7 @@ The website never reads a half-built document. If translation for one language f
 
 ### Core services
 
-**Amazon Bedrock AgentCore Runtime** hosts and runs the bounded agent workflow. It receives the normalized execution payload, coordinates sanitization and message generation, and returns a structured result. AgentCore is the main AWS deployment required by the challenge and the component that turns a script into an operable agent application. citeturn1search1turn1search5
+**Amazon Bedrock AgentCore Runtime** hosts and runs the bounded agent workflow. It receives the normalized execution payload, coordinates sanitization and message generation, and returns a structured result. AgentCore is the main AWS deployment required by the challenge and the component that turns a script into an operable agent application. 
 
 **Amazon Bedrock** provides the foundation model used to rewrite raw notes and generate the canonical desk-side summary. **Amazon Bedrock Guardrails** adds sensitive-information, word, content, and denied-topic policies around the model interaction. Sensitive-information filters can mask or block detected PII, but I still combine them with deterministic scanning and fail-closed publication.
 
