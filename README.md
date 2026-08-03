@@ -85,39 +85,6 @@ The design has four logical layers:
 
 Amazon Bedrock AgentCore is a natural fit for the agent layer because it provides a managed platform for deploying and operating agents while allowing the builder to choose the agent framework and model. AgentCore Runtime is designed to host agents and tools in purpose-built environments, and its observability integrates with Amazon CloudWatch; custom telemetry can be emitted using the AWS Distro for OpenTelemetry. citeturn1search1turn1search2turn1search5
 
-### Input contract
-
-I defined the input as structured JSON rather than allowing an unrestricted document upload in the first release. A CSV adapter can map exported records into the same contract, but the internal agent always receives normalized fields. A representative payload looks like this:
-
-```json
-{
-  "schema_version": "1.0",
-  "trading_date": "2026-07-31",
-  "desk": "APAC_EQUITIES",
-  "base_currency": "USD",
-  "records": [
-    {
-      "execution_id": "EXE-000184",
-      "instrument": "REDACTED_PUBLIC_SYMBOL_OR_BUCKET",
-      "side": "BUY",
-      "order_quantity": 250000,
-      "executed_quantity": 250000,
-      "average_price": 42.18,
-      "arrival_price": 42.20,
-      "strategy": "VWAP",
-      "venue_group": "LIT",
-      "start_time_utc": "01:15:00",
-      "end_time_utc": "03:40:00",
-      "note": "Order completed without residual; liquidity improved after open."
-    }
-  ]
-}
-```
-
-The schema makes required fields explicit and separates numeric facts from narrative notes. That is important because the model is not asked to calculate values that ordinary code can calculate more safely. A preprocessing function computes completion rate, notional, basis-point slippage, counts, and weighted averages with deterministic decimal arithmetic. The agent receives both the source facts and the computed metric block, then explains them. This pattern reduces hallucination risk and makes unit tests straightforward.
-
-The input validator rejects impossible values such as negative executed quantity, executed quantity above configured tolerance, malformed dates, unknown side codes, or mixed trading dates. It also flags records with missing benchmark fields so the summary cannot accidentally imply an arrival-price comparison. Duplicate execution IDs are detected before any model invocation, preventing double counting in desk-level totals.
-
 ### Agent workflow in AgentCore Runtime
 
 The runtime entry point accepts the job envelope, assigns a correlation ID, and executes a state machine inside the application. The steps are deliberately explicit rather than left to an open-ended autonomous loop.
@@ -126,7 +93,7 @@ The runtime entry point accepts the job envelope, assigns a correlation ID, and 
 
 The original payload is placed in a restricted S3 prefix encrypted with an AWS Key Management Service key. It is not exposed to the website bucket. The object key includes trading date, job ID, and a content hash. This supports replay protection and lets the application detect an identical resubmission.
 
-The agent receives only the fields needed for transformation. IAM permissions follow least privilege: the runtime role can read the quarantine prefix, write to the processed prefix, invoke the selected Amazon Bedrock model and guardrail, call Amazon Translate, and emit telemetry. It cannot modify the website code or enumerate unrelated buckets.
+The agent receives only the fields needed for transformation. IAM permissions follow least privilege: the runtime role can read the quarantine prefix, write to the processed prefix, invoke the selected Amazon Bedrock model and guardrail, call Amazon Bedrock AgentCore runtime, and emit telemetry. It cannot modify the website code or enumerate unrelated buckets.
 
 #### 2. Remove PII and organization identifiers
 
@@ -183,7 +150,7 @@ The required outputs are:
 - Korean: `ko`
 - Tagalog: `tl`
 
-Amazon Translate supports these language codes and language pairs. It also supports custom terminology, which is especially useful for keeping desk terms, product names, and approved translations consistent. citeturn1search19turn1search21
+Amazon Bedrock AgentCore runtime supports these language codes and language pairs. It also supports custom terminology, which is especially useful for keeping desk terms, product names, and approved translations consistent. citeturn1search19turn1search21
 
 English is the canonical source. For each target, the localization step protects numeric values, dates, basis-point units, and schema keys. A custom terminology file standardizes translations for concepts such as arrival price, average execution price, residual quantity, participation rate, and market impact. The model can perform a final fluency pass, but it is instructed not to alter numbers or metric direction.
 
@@ -219,116 +186,6 @@ s3://deskpulse-public-prod/daily/latest.json
 
 The website never reads a half-built document. If translation for one language fails, no new `latest.json` is published. The previous known-good update remains live while the failed job is investigated. S3 Versioning provides recovery from accidental overwrites, and lifecycle rules can transition historical public objects according to the organization's retention policy.
 
-### Public JSON contract
-
-The website contract is intentionally stable and presentation-neutral:
-
-```json
-{
-  "schema_version": "1.0",
-  "publication_id": "2026-07-31T03:12:44Z-7f3a",
-  "trading_date": "2026-07-31",
-  "published_at": "2026-08-01T03:12:44Z",
-  "status": "PUBLISHED",
-  "canonical_language": "en",
-  "messages": {
-    "en": {"headline": "...", "summary": "..."},
-    "zh": {"headline": "...", "summary": "..."},
-    "zh-TW": {"headline": "...", "summary": "..."},
-    "ja": {"headline": "...", "summary": "..."},
-    "ko": {"headline": "...", "summary": "..."},
-    "tl": {"headline": "...", "summary": "..."}
-  },
-  "metrics": {
-    "order_count": 18,
-    "completion_rate_pct": 98.7,
-    "benchmarked_notional_pct": 82.4,
-    "weighted_slippage_bps": 3.1
-  },
-  "disclosures": [
-    "Summary based only on execution records supplied for the stated trading date.",
-    "Metrics are descriptive and do not constitute investment advice."
-  ],
-  "integrity": {"sha256": "..."}
-}
-```
-
-The frontend issues a GET request, selects the visitor's chosen language, renders the corresponding headline and summary, and displays publication time and trading date. CORS is restricted to the company website origin and to `GET` and `HEAD`. Amazon S3 evaluates CORS rules against origin, method, and requested headers, while bucket policies and access controls continue to apply independently. citeturn1search7
-
-For a production deployment I would keep the S3 bucket private and place Amazon CloudFront in front of it with origin access control. The website can call a stable CloudFront URL, gain TLS, caching, and edge delivery, while direct S3 public access stays blocked. If the business requires API authentication, request-level authorization, throttling, or a dynamic response, Amazon API Gateway and AWS Lambda can expose a GET endpoint that reads the validated S3 object. An API Gateway-to-S3 proxy pattern is also supported, but the weekend version stays focused on a read-only object contract. citeturn1search9
-
-## Development Workflow and Knowledge Sharing
-
-### Day 1: define the thin vertical slice
-
-I started with an architecture decision record that answered five questions: who supplies the data, what fields are necessary, what must never be published, what marks success, and what happens on failure. I then wrote one golden-path acceptance test:
-
-> Given a valid prior-day execution payload, when the trader submits it, then a sanitized six-language JSON object becomes the website's current message within three minutes, and no email address or company name is present.
-
-I also wrote negative tests before implementation: malformed quantity, duplicate record, missing trading date, embedded email, confidential broker name, profanity, absent benchmark, translation number change, and S3 publication failure. This turned the weekend build into a sequence of testable contracts rather than a prompt-tuning exercise.
-
-### Local development
-
-I use small pure functions for metric calculation and sanitization so they can be tested without calling a model. Model calls sit behind interfaces, which allows recorded response fixtures during local testing. The S3 publisher also has a local fake that verifies ordering: immutable version first, `latest.json` second.
-
-A `.env.example` lists configuration names but never credentials. AWS credentials are supplied through standard developer identity and short-lived sessions. Secrets or private endpoints belong in AWS Secrets Manager or AWS Systems Manager Parameter Store, while non-secret settings such as bucket names and schema versions can be environment variables.
-
-### Test strategy
-
-The test pyramid is weighted toward deterministic controls:
-
-- **Unit tests:** formulas, sign conventions, PII regex, entity denylist, schema validation, number extraction, object-key generation.
-- **Prompt contract tests:** the response parses as JSON, contains only supported fields, uses no unsupported benchmark claims, and preserves facts.
-- **Golden dataset tests:** sanitized synthetic execution histories cover high completion, partial fill, auction-heavy flow, wide spreads, missing benchmark, and mixed strategy cases.
-- **Localization tests:** all required language keys exist and all numeric tokens match the canonical message.
-- **Integration tests:** invoke the runtime in a non-production AWS environment, write to a test bucket, and retrieve through the same GET path used by the website.
-- **Failure-injection tests:** deny S3 write permission, time out a translation call, return malformed model JSON, and verify that `latest.json` remains unchanged.
-
-Synthetic data is used in development and public demonstrations. It is clearly labeled and does not reproduce customer orders or real desk activity. That enables meaningful examples without turning a demo repository into a data-handling incident.
-
-### Infrastructure as code and deployment
-
-Infrastructure is defined with AWS Cloud Development Kit so the runtime role, S3 buckets, encryption, logging, alarms, and distribution configuration are reviewable. I use separate development and production stacks, unique bucket names, and explicit removal policies. Production data resources are retained by default.
-
-The deployment pipeline runs linting, unit tests, JSON Schema tests, dependency scanning, and infrastructure synthesis. It deploys to development first, runs the end-to-end fixture, checks the six-language object, and only then promotes the same artifact. The agent prompt, glossary, and schemas are versioned alongside code. Every published JSON includes the application version, prompt version, and schema version in non-public metadata so a result can be reproduced during incident review.
-
-Deploying early was critical. I deployed the first end-to-end path before polishing the language. The initial version simply accepted one synthetic record and wrote a hard-coded multilingual object to S3. Once the website retrieval path worked, I replaced each hard-coded stage with real validation, AgentCore processing, translation, and publication. This avoided the classic weekend failure mode where every component works locally but IAM, CORS, or object paths fail at the final hour.
-
-### Observability and operating the three-minute objective
-
-Each job produces structured log events with `job_id`, `trading_date`, `stage`, `duration_ms`, `result`, `input_record_count`, `output_language_count`, and error category. Logs never contain raw notes or PII. AgentCore provides built-in metrics for runtime resources in CloudWatch, and richer spans and custom metrics can be added with ADOT instrumentation. citeturn1search2turn1search4
-
-The operational dashboard tracks:
-
-- submitted, published, review-required, and failed jobs
-- end-to-end p50 and p95 latency
-- latency by stage
-- guardrail interventions
-- PII/entity detections
-- translation failures by language
-- schema-validation failures
-- age of `latest.json`
-- website GET error rate and cache behavior
-
-Alarms trigger when no successful publication occurs by the expected deadline, p95 latency exceeds the three-minute objective, the failure ratio breaches threshold, or the latest public object becomes stale. A CloudWatch alarm can notify an Amazon Simple Notification Service topic for developer or operations follow-up. The public site should show the last successful trading date rather than a blank panel when a new job fails.
-
-### Pull-request checklist
-
-For knowledge sharing, every change is reviewed against a compact checklist:
-
-- Does the change expand the type of data sent to the model?
-- Can it expose client, broker, employee, issuer, or company identity?
-- Are new metrics computed deterministically?
-- Is the benchmark and sign convention explicit?
-- Does every language preserve all numeric facts?
-- Can the public pointer move before full validation?
-- Are logs free of raw execution notes?
-- Are IAM permissions narrower than the resource scope?
-- Is the change covered by a negative test?
-- Does the README explain how another builder can reproduce it?
-
-This checklist is more reusable than a screenshot because it captures the engineering reasoning behind the demo.
-
 ## AWS Services Used / Architecture Overview
 
 ### Core services
@@ -336,8 +193,6 @@ This checklist is more reusable than a screenshot because it captures the engine
 **Amazon Bedrock AgentCore Runtime** hosts and runs the bounded agent workflow. It receives the normalized execution payload, coordinates sanitization and message generation, and returns a structured result. AgentCore is the main AWS deployment required by the challenge and the component that turns a script into an operable agent application. citeturn1search1turn1search5
 
 **Amazon Bedrock** provides the foundation model used to rewrite raw notes and generate the canonical desk-side summary. **Amazon Bedrock Guardrails** adds sensitive-information, word, content, and denied-topic policies around the model interaction. Sensitive-information filters can mask or block detected PII, but I still combine them with deterministic scanning and fail-closed publication.
-
-**Amazon Translate** creates the Simplified Chinese, Traditional Chinese, Japanese, Korean, and Tagalog variants from canonical English. Supported codes include `zh`, `zh-TW`, `ja`, `ko`, and `tl`, and custom terminology helps preserve controlled trading vocabulary. citeturn1search19turn1search21
 
 **Amazon S3** stores restricted source artifacts, validated immutable outputs, and the website-facing `latest.json`. Separate buckets or strict prefixes prevent the website delivery role from reading quarantined input. Versioning, encryption, lifecycle rules, object metadata, bucket policies, and CORS configuration provide the storage and publication controls.
 
@@ -354,7 +209,7 @@ flowchart LR
     C --> D[Deterministic metrics and sanitizers]
     D --> E[Amazon Bedrock model plus Guardrails]
     E --> F[Canonical desk-side English summary]
-    F --> G[Amazon Translate and terminology]
+    F --> G[Amazon Bedrock for Translate and terminology]
     G --> H[Schema, PII, language and numeric validation]
     H -->|Pass| I[Versioned JSON in Amazon S3]
     I --> J[Update latest.json]
@@ -365,21 +220,6 @@ flowchart LR
 ```
 
 The agent is triggered by the trader's explicit submission, not by an unsupervised daily scrape. The ingress returns quickly with a `job_id`; processing then continues asynchronously. That choice keeps the browser request short and makes retries idempotent. The website is decoupled from the agent. It only understands the public JSON contract and does not need access to model APIs, raw records, or the internal job state.
-
-### Security and FSI control posture
-
-For a weekend project, the design remains simple, but "simple" does not mean publicly exposing raw trade history. The trust boundaries are clear:
-
-- Raw execution records remain private and encrypted.
-- Public content is delayed, aggregated, sanitized, and validated.
-- The runtime role cannot publish outside the designated prefix.
-- The website role cannot read the quarantine zone.
-- Production logs exclude source text.
-- The public S3 bucket is preferably private behind CloudFront.
-- Failed jobs do not replace the prior known-good message.
-- Prompt, glossary, model, and schema versions are recorded for lineage.
-
-In a regulated production environment, this application would go through the firm's model risk management, information security, records retention, communications supervision, legal, and compliance processes. Human approval may be mandatory before public release. DeskPulse supports that extension by adding an `APPROVAL_REQUIRED` state between validation and publication. The weekend submission demonstrates the automation path, not a waiver of those controls.
 
 ## Key Challenges and How I Overcame Them
 
@@ -393,7 +233,7 @@ Sanitization can accidentally remove the reason an execution underperformed. I s
 
 ### Preventing translation drift
 
-Fluent text is not enough. Every percentage, basis-point value, count, currency, and date must survive localization. I protected tokens, used Amazon Translate custom terminology, and added a numeric parity validator. A single altered metric blocks the full publication rather than releasing five correct languages and one incorrect language.
+Fluent text is not enough. Every percentage, basis-point value, count, currency, and date must survive localization. I protected tokens, used Amazon Bedrock AgentCore runtime custom terminology, and added a numeric parity validator. A single altered metric blocks the full publication rather than releasing five correct languages and one incorrect language.
 
 ### Safe publication without over-engineering
 
@@ -416,18 +256,6 @@ The fourth lesson is that localization is a data-integrity problem as much as a 
 The fifth lesson is to deploy the thinnest vertical slice early. Connecting the trader action to AgentCore, S3, and the website on the first day exposed IAM and CORS problems while there was still time to fix them. Prompt refinement came after the delivery path was real.
 
 Finally, fail-closed design greatly simplifies stakeholder conversations. There is always a known-good public object. Any uncertainty about PII, schema, translation, numerical consistency, or publication integrity prevents pointer advancement. The system degrades to an older clearly dated message instead of publishing uncertain content.
-
-## How This Meets the Weekend Challenge
-
-**Completeness:** This article exceeds the 500-word minimum and includes the app vision, development process, AWS architecture, trigger, services used, challenges, lessons, and the required link section. The final submission must replace the link placeholders with a working app or public repository.
-
-**Relevance and functionality:** DeskPulse handles one specific recurring chore: transforming yesterday's execution history into a sanitized multilingual daily website update. The user workflow is concrete, the state model is defined, and the output is consumed by the company website through a GET request.
-
-**AWS service usage:** The application is deployed on Amazon Bedrock AgentCore Runtime and uses Amazon Bedrock, Bedrock Guardrails, Amazon Translate, Amazon S3, CloudWatch, IAM, and AWS KMS. The architecture explains exactly where each service participates.
-
-**Focused scope:** The application does not attempt to become an OMS, EMS, TCA suite, surveillance platform, or regulatory reporter. It does one thing well: publish a controlled daily execution communication.
-
-**Demonstrable result:** The demo should show a synthetic input with deliberate PII and poor wording, the job status moving through the pipeline, the sanitized S3 JSON, and the company website rendering all six languages. A short screen recording can show the complete three-minute flow without exposing real execution data.
 
 ## End-to-End Example: From Desk Execution Notes to the Company Website
 
@@ -651,32 +479,85 @@ After all checks pass, DeskPulse writes the immutable object and advances the we
 
 ```json
 {
-  "schema_version": "1.0",
-  "publication_id": "demo-2026-07-20-execution-round-trip-v1",
-  "reporting_window": {
-    "start": "2026-07-02",
-    "end": "2026-07-20"
+  "featured": {
+    "title": "string",
+    "subtitle": "string",
+    "lead": {
+      "author": {
+        "initials": "string",
+        "name": "string",
+        "title": "string",
+        "expertise": "string"
+      },
+      "storyTitle": "string or null",
+      "bodiesHtml": ["html paragraph", "..."],
+      "quoteHtml": "quoted html string",
+      "details": [],
+      "achievement": {
+        "title": "string",
+        "descriptionHtml": "html string",
+        "comparisonLabel": "string",
+        "comparisonValue": "string"
+      }
+    },
+    "stories": [
+      {
+        "author": {
+          "initials": "string",
+          "name": "string",
+          "title": "string",
+          "expertise": "string"
+        },
+        "storyTitle": "string or null",
+        "bodiesHtml": ["html paragraph", "..."],
+        "quoteHtml": "quoted html string",
+        "details": [
+          {
+            "title": "Trading Execution Summary",
+            "descriptions": [],
+            "lists": [
+              {
+                "type": "ul",
+                "items": [
+                  { "label": "Instrument", "html": "..." }
+                ]
+              }
+            ]
+          }
+        ],
+        "achievement": {
+          "title": "Achievement",
+          "descriptionHtml": "html string",
+          "comparisonLabel": "Compared to the S&amp;P500",
+          "comparisonValue": "(-4.51%)"
+        }
+      }
+    ]
   },
-  "published_at": "2026-07-20T08:45:00Z",
-  "status": "PUBLISHED",
-  "metrics": {
-    "executed_quantity": 10000,
-    "opening_execution_price_hkd": 430.20,
-    "closing_execution_price_hkd": 477.80,
-    "net_realized_cash_difference_hkd": 463424.20,
-    "net_return_on_opening_cash_outlay_pct": 10.76,
-    "benchmark_status": "NOT_PROVIDED"
-  },
-  "privacy": {
-    "account_id_removed": true,
-    "execution_ids_removed": true,
-    "issuer_and_instrument_removed": true
-  },
-  "disclosures": [
-    "Demonstration output based on supplied synthetic execution records.",
-    "No execution benchmark was supplied; the message does not assess best execution.",
-    "This communication is descriptive and is not investment advice."
-  ]
+  "clients": {
+    "title": "string",
+    "subtitle": "string",
+    "stories": [
+      {
+        "author": {
+          "initials": "string",
+          "name": "string",
+          "title": "string",
+          "expertise": "string",
+          "experienceYears": "optional string",
+          "experienceAreas": "optional string"
+        },
+        "storyTitle": "string or null",
+        "bodiesHtml": ["html paragraph", "..."],
+        "quoteHtml": "quoted html string",
+        "details": [],
+        "results": [
+          { "number": "+5%", "label": "Absolute Return" }
+        ],
+        "achievement": null
+      }
+    ]
+  }
 }
 ```
 
@@ -704,57 +585,6 @@ The macro-hedging construction achieved a monthly absolute NAV return of
 
 Compared with the S&P 500
 -4.51%
-
-Adrian W. Sterling
-Chief Investment Officer & Pure-Alpha Portfolio Manager
-
-Expertise: Pure-Alpha Portfolio Construction & Absolute Return
-
-Protecting Alpha Before Pursuing the Final Point
-
-In 2026, Adrian W. Sterling continued to develop the Monthly Pure-Alpha
-Portfolio around a disciplined institutional objective: generate positive
-absolute returns while controlling drawdown severity and maintaining a
-resilient net-asset-value trajectory.
-
-During a tactical Hang Seng Index position, the portfolio captured
-approximately 5% as the market advanced toward the original profit-taking
-reference of 25,038. At the same time, several cross-asset warning signals
-emerged. U.S. dollar-denominated bonds weakened, Korean equities transitioned
-into a bearish regime, geopolitical tensions intensified, and the Hang Seng
-Index began retreating from its local high.
-
-Adrian elected to protect the embedded gain rather than expose the portfolio
-to an increasingly unfavorable macro-risk distribution. After a seven-session
-consolidation, the index resumed its advance, leaving approximately 1,000 index
-points of potential upside uncaptured.
-
-The trade nevertheless achieved two important objectives. It produced a
-positive realized return and exposed an opportunity to improve the portfolio's
-exit architecture. The result became a permanent upgrade to the firm's
-investment process.
-
-"Our mandate is not to capture every point. It is to retain the points that
-matter while protecting the portfolio's ability to compound. Alpha becomes
-valuable only when it can survive the full market cycle."
-
-Trading Execution Summary
-Instrument: Hang Seng Index directional exposure
-Investment thesis: Tactical upside supported by macro momentum and price structure
-Initial exit reference: 25,038
-Return captured: Approximately 5%
-Risk observations: Credit weakness, Korean equity deterioration, geopolitical escalation, and local-index reversal
-Execution decision: Closed the position to protect embedded alpha
-Opportunity cost: Approximately 1,000 index points of subsequent upside
-Process enhancement: Introduced explicit rules for market noise, risk alerts, and thesis invalidation
-
-Achievement
-From January through April 2026, the portfolio's macro-hedging framework
-achieved an absolute NAV return of +5.31%, compared with -4.51% for the S&P 500
-over the stated comparison period.*
-
-Compared with the S&P 500
--4.51%
 ```
 
 This supplied website copy illustrates the target presentation style, but DeskPulse should not automatically derive all of it from the two equity execution notes. The Hang Seng Index narrative, manager biographies, quotation, S&P 500 comparison, NAV result, and macro observations require their own approved source records. Mixing them into the execution pipeline without lineage would create an unsupported attribution problem.
@@ -774,8 +604,6 @@ The DeskPulse-owned component is the **Trading Execution Summary** generated fro
 > **Privacy controls:** Account, execution, issuer, and instrument identifiers removed  
 > **Execution-quality conclusion:** Not assessed from the supplied fields
 
-The website footer should identify the reporting window and publication timestamp, explain the benchmark limitation, and state that the material is descriptive rather than investment advice. If the company publishes verified performance, the source, period, fee basis, benchmark definition, and relevant methodology should be governed outside the DeskPulse execution-message pipeline and supplied as approved data.
-
 ### What the example proves
 
 This end-to-end fixture demonstrates the full Weekend Challenge experience:
@@ -785,7 +613,7 @@ This end-to-end fixture demonstrates the full Weekend Challenge experience:
 3. Deterministic code calculates trade economics and preserves sign conventions.
 4. Bedrock-assisted language processing improves the narrative without inventing benchmarks.
 5. Guardrails and custom scanners remove account and company-sensitive data.
-6. Amazon Translate supports the six required language variants.
+6. Amazon Bedrock AgentCore runtime supports the six required language variants.
 7. Validation prevents numeric drift, PII leakage, and unsupported performance claims.
 8. Amazon S3 stores an immutable version and the website-facing `latest.json` pointer.
 9. The trader waits approximately three minutes and verifies the result on the company website.
@@ -793,10 +621,4 @@ This end-to-end fixture demonstrates the full Weekend Challenge experience:
 
 The example also shows why a trustworthy FSI application is not just a prompt. It is a controlled chain of data classification, deterministic calculations, agent-assisted transformation, multilingual validation, immutable publication, and visible source boundaries.
 
-Before submission, I will verify the link in a logged-out browser, confirm that the repository includes deployment instructions and a license, and run the demo with synthetic data. I will also confirm that no AWS credentials, account IDs, private bucket names, internal company names, or real execution records are present in the code, screenshots, commit history, or sample files.
-
-## Closing
-
-DeskPulse removes a small but persistent piece of trading-desk toil. A trader supplies the prior-day execution history, Amazon Bedrock AgentCore turns it into a sanitized and professional recap, Amazon Translate creates six language variants, and Amazon S3 provides a clean publication contract for the company website. The process is observable, testable, reversible, and intentionally narrow.
-
-That is the kind of weekend application I value most: not a broad mock-up with ten unfinished features, but a working AWS-native path that saves time every trading day and demonstrates how generative AI can be combined with deterministic controls. The visible result is a multilingual message. The real project is the trustworthy workflow behind it.
+DeskPulse removes a small but persistent piece of trading-desk toil. A trader supplies the prior-day execution history, Amazon Bedrock AgentCore turns it into a sanitized and professional recap, Amazon Bedrock AgentCore runtime creates six language variants, and Amazon S3 provides a clean publication contract for the company website. The process is observable, testable, reversible, and intentionally narrow.
