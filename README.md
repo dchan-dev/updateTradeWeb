@@ -6,15 +6,26 @@ Tag: #productivity
 - **Live app:** https://aws-user-group.com/demo/best_frontier_prime_securities_ai/index.html
 - **Public GitHub repository:** https://github.com/dchan-dev/updateTradeWeb
 
+User Mindset Flow
+![User Mindset Flow](<img/User Mindset Flow.png>)
+
+AWS Architecture
 ![AWS Architecture](<img/AWS Architecture.png>)
 
+Data Flow on AWS Architecture
 ![Data Flow on AWS Architecture](<img/Data Flow on AWS Architecture.png>)
 
+Get Started High-Level Product Flow
 ![Get Started High-Level Product Flow](<img/Get Started High-Level Product Flow.png>)
 
+High-Level Entire Organization Flow
 ![High-Level Entire Organization Flow](<img/High-Level Entire Organization Flow.png>)
 
-![User Mindset Flow](<img/User Mindset Flow.png>)
+Website
+![screen.png](img/screen.png)
+
+Website API call
+![screen2.png](img/screen2.png)
 
 # Weekend Annoying Task Challenge: DeskPulse
 
