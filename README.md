@@ -1,6 +1,8 @@
 Title: Weekend Annoying Task Challenge: Trading Desk Execute Summary On Cloud, On Chain, On Air
 Tag: #productivity
 
+---
+
 ## Link to App or Repo
 
 - **Live app:** https://aws-user-group.com/demo/best_frontier_prime_securities_ai/index.html
@@ -27,6 +29,8 @@ Website
 Website API call
 ![screen2.png](img/screen2.png)
 
+---
+
 # Weekend Annoying Task Challenge: DeskPulse
 
 Every trading day ends with the same deceptively simple obligation: turn the desk's execution history into a concise, professional update for shareholders and partners, then publish it reliably across multiple languages. The task is repetitive, time-sensitive, and easy to get wrong when the desk is already focused on post-trade controls, breaks, allocations, and the next session's risk.
@@ -35,7 +39,11 @@ I built **DeskPulse**, an AWS-native application that converts a trader's prior-
 
 The project deliberately solves one annoying task well. It does not place orders, recommend trades, alter books and records, calculate regulatory capital, or replace transaction reporting. Its scope is controlled publication of a factual post-trade communication derived from a supplied execution history. That narrow boundary made it an ideal submission for the Weekend Challenge and, more importantly, made it possible to build a useful working vertical slice without turning a weekend project into a full order management system.
 
+---
+
 ## Vision & What the App Does
+
+---
 
 ### The annoying task
 
@@ -51,6 +59,8 @@ That manual process creates several forms of operational drag:
 
 DeskPulse changes the operating model from manual composition to exception-based review. The trader provides the previous trading day's execution history. Amazon Bedrock AgentCore Runtime receives that payload and orchestrates a bounded transformation pipeline. The application removes PII and organization-specific names, filters poor language, rewrites the note in professional sell-side or buy-side execution vocabulary, produces a concise performance summary, translates the approved canonical summary into six variants, validates the output against a JSON schema, and stores it in Amazon S3. The company website then retrieves the current JSON object over a GET request.
 
+---
+
 ### The three-minute workflow
 
 The successful path is intentionally boring:
@@ -62,6 +72,8 @@ The successful path is intentionally boring:
 
 A clear status model supports that journey: `RECEIVED`, `SANITIZING`, `NORMALIZING`, `SUMMARIZING`, `TRANSLATING`, `VALIDATING`, `PUBLISHING`, `PUBLISHED`, or `FAILED`. The three-minute figure is a user-facing service objective for this project, not a claim that every model call always takes that long. The workflow is instrumented so I can track p50, p95, and maximum end-to-end latency and identify whether time is being spent in input validation, the agent, translation, S3 publication, or website cache refresh.
 
+---
+
 ### The output is a communication, not an execution report
 
 That distinction matters in financial services. DeskPulse can summarize observable facts such as the number of parent orders, aggregate notional represented in the supplied data, completion ratio, venue mix, average participation, arrival-price slippage if the input includes a valid benchmark, or the portion of flow executed through limit, market, VWAP, TWAP, or participation-style strategies. It can discuss liquidity conditions, spread environment, urgency, residual quantity, and market impact in cautious language.
@@ -70,7 +82,11 @@ It must not invent best execution conclusions. A statement such as "execution qu
 
 The application also avoids exposing order-level alpha, client identity, restricted-list information, material non-public information, or details that could enable reverse engineering of the desk's execution strategy. Public output is aggregated and delayed to the prior trading day. This is not only a privacy measure. It reduces information leakage around live liquidity demand, broker routing behavior, venue preference, and remaining inventory.
 
+---
+
 ## How I Built It
+
+---
 
 ### Architecture first, prompt second
 
@@ -85,15 +101,21 @@ The design has four logical layers:
 
 Amazon Bedrock AgentCore is a natural fit for the agent layer because it provides a managed platform for deploying and operating agents while allowing the builder to choose the agent framework and model. AgentCore Runtime is designed to host agents and tools in purpose-built environments, and its observability integrates with Amazon CloudWatch; custom telemetry can be emitted using the AWS Distro for OpenTelemetry. citeturn1search1turn1search2turn1search5
 
+---
+
 ### Agent workflow in AgentCore Runtime
 
 The runtime entry point accepts the job envelope, assigns a correlation ID, and executes a state machine inside the application. The steps are deliberately explicit rather than left to an open-ended autonomous loop.
+
+---
 
 #### 1. Receive and quarantine
 
 The original payload is placed in a restricted S3 prefix encrypted with an AWS Key Management Service key. It is not exposed to the website bucket. The object key includes trading date, job ID, and a content hash. This supports replay protection and lets the application detect an identical resubmission.
 
 The agent receives only the fields needed for transformation. IAM permissions follow least privilege: the runtime role can read the quarantine prefix, write to the processed prefix, invoke the selected Amazon Bedrock model and guardrail, call Amazon Bedrock AgentCore runtime, and emit telemetry. It cannot modify the website code or enumerate unrelated buckets.
+
+---
 
 #### 2. Remove PII and organization identifiers
 
@@ -103,6 +125,8 @@ Company names require special handling because generic PII filters are not the s
 
 This architecture acknowledges an FSI reality: probabilistic redaction is useful, but it is not an entitlement control and it is not perfect. Deterministic checks, data minimization, a restricted raw-data zone, and fail-closed publication remain necessary.
 
+---
+
 #### 3. Remove poor language without deleting meaning
 
 Trader notes can be terse, emotional, or packed with shorthand. The goal is not to erase adverse execution facts. It is to remove profanity, insults, blame, and unprofessional phrasing while preserving operational meaning. "Broker was useless and missed the whole move" cannot become "execution was successful." A faithful normalization might be: "The order did not maintain the requested participation during the price move; broker follow-up is required."
@@ -110,6 +134,8 @@ Trader notes can be terse, emotional, or packed with shorthand. The goal is not 
 I configured content and word filters and added prompt instructions that distinguish tone correction from fact correction. Bedrock Guardrails supports content filters, denied topics, word filters, and sensitive-information filters, allowing the application to apply consistent safeguards around model input and output. citeturn1search15turn1search16
 
 The denied-topic policy also blocks the generation of personalized investment recommendations. This is a post-trade communication tool, not a research or advisory channel. If the input note contains a forward-looking trade recommendation, the agent removes it from the public summary and records a non-public validation warning.
+
+---
 
 #### 4. Upgrade the note to desk-side language
 
@@ -127,6 +153,8 @@ The prompt also contains forbidden behaviors: do not infer client intent, do not
 
 The sign convention is part of the schema. For a buy, positive cost means the execution price is above the benchmark; for a sell, positive cost means the execution price is below the benchmark. Encoding this explicitly prevents a common trust-destroying error where favorable and unfavorable slippage are inverted between sides.
 
+---
+
 #### 5. Summarize performance
 
 The summary has three layers:
@@ -138,6 +166,8 @@ The summary has three layers:
 A typical canonical output might state that the desk completed a specified percentage of submitted quantity, that the benchmarked subset recorded a given weighted slippage, and that liquidity was concentrated around the opening auction or a later volume window. It does not bury exceptions. Material residuals, rejected records, missing benchmarks, or unusual deviations are surfaced in an `exceptions` array.
 
 To keep the public message within project scope, account-level, client-level, and security-level details are aggregated into desk-safe buckets. Exact instruments can be omitted or grouped by asset class, region, or liquidity band. The public message is designed for shareholder and partner transparency, not transaction cost analysis drill-down.
+
+---
 
 #### 6. Translate into six language variants
 
@@ -157,6 +187,8 @@ English is the canonical source. For each target, the localization step protects
 Traditional Chinese is not produced by a character-conversion shortcut. It receives its own `zh-TW` translation and terminology choices. Similarly, Japanese and Korean outputs avoid literal transliteration where a recognized markets term is more appropriate. Tagalog output favors plain professional communication because some highly specialized trading concepts may be clearer when the approved English term is retained in parentheses.
 
 After translation, a consistency validator extracts every number and compares it with the canonical source. A missing percentage, changed decimal separator, reversed sign, or altered date fails validation. This is one of the highest-value controls in the pipeline because a fluent translation with the wrong slippage number is worse than no translation.
+
+---
 
 #### 7. Validate and publish
 
@@ -186,7 +218,11 @@ s3://deskpulse-public-prod/daily/latest.json
 
 The website never reads a half-built document. If translation for one language fails, no new `latest.json` is published. The previous known-good update remains live while the failed job is investigated. S3 Versioning provides recovery from accidental overwrites, and lifecycle rules can transition historical public objects according to the organization's retention policy.
 
+---
+
 ## AWS Services Used / Architecture Overview
+
+---
 
 ### Core services
 
@@ -200,48 +236,41 @@ The website never reads a half-built document. If translation for one language f
 
 **AWS Identity and Access Management** constrains each component to its required actions. **AWS Key Management Service** protects S3 objects and other encrypted resources. **Amazon CloudFront** is the preferred production delivery layer for the private S3 origin. Optional **Amazon API Gateway** and **AWS Lambda** can provide an authenticated or dynamic GET API if direct static retrieval is not sufficient.
 
-### Trigger and data flow
-
-```mermaid
-flowchart LR
-    A[Trader submits prior-day execution history] --> B[Ingress API]
-    B --> C[Amazon Bedrock AgentCore Runtime]
-    C --> D[Deterministic metrics and sanitizers]
-    D --> E[Amazon Bedrock model plus Guardrails]
-    E --> F[Canonical desk-side English summary]
-    F --> G[Amazon Bedrock for Translate and terminology]
-    G --> H[Schema, PII, language and numeric validation]
-    H -->|Pass| I[Versioned JSON in Amazon S3]
-    I --> J[Update latest.json]
-    J --> K[CloudFront or read-only GET API]
-    K --> L[Company website language selector]
-    H -->|Fail| M[Review required, previous version remains live]
-    C --> N[CloudWatch logs, metrics and traces]
-```
-
-The agent is triggered by the trader's explicit submission, not by an unsupervised daily scrape. The ingress returns quickly with a `job_id`; processing then continues asynchronously. That choice keeps the browser request short and makes retries idempotent. The website is decoupled from the agent. It only understands the public JSON contract and does not need access to model APIs, raw records, or the internal job state.
+---
 
 ## Key Challenges and How I Overcame Them
+
+---
 
 ### Making AI output deterministic enough for a website
 
 The model is good at rewriting prose but should not own arithmetic or publication state. I moved calculations into code, constrained model output with a schema, lowered temperature, validated every field, and treated the generated message as an untrusted candidate until all checks passed. The result is a hybrid system: generative AI for language, deterministic software for numbers and control flow.
 
+---
+
 ### Preserving FSI meaning while cleaning tone
 
 Sanitization can accidentally remove the reason an execution underperformed. I separated "unprofessional wording" from "negative fact." The application may remove blame or profanity, but it preserves delayed participation, residual quantity, rejected fills, adverse price movement, and missing liquidity. Golden tests compare the factual propositions before and after normalization.
+
+---
 
 ### Preventing translation drift
 
 Fluent text is not enough. Every percentage, basis-point value, count, currency, and date must survive localization. I protected tokens, used Amazon Bedrock AgentCore runtime custom terminology, and added a numeric parity validator. A single altered metric blocks the full publication rather than releasing five correct languages and one incorrect language.
 
+---
+
 ### Safe publication without over-engineering
 
 A database and content-management workflow would work, but the challenge rewards a focused app. A versioned JSON object in S3 gives the website a small, durable contract. Writing immutable content before updating a single pointer provides rollback and avoids partial publication. The architecture can later add an approval queue or database without changing the website response shape.
 
+---
+
 ### Meeting the three-minute experience
 
 I parallelized independent target-language translations, capped retries, used idempotent job IDs, and measured stage-level latency. Timeouts fail closed. The previous message remains available, and the trader sees a precise failure stage rather than an endless spinner. This is more valuable operationally than hiding latency behind optimistic UI copy.
+
+---
 
 ## What I Learned
 
@@ -257,11 +286,15 @@ The fifth lesson is to deploy the thinnest vertical slice early. Connecting the 
 
 Finally, fail-closed design greatly simplifies stakeholder conversations. There is always a known-good public object. Any uncertainty about PII, schema, translation, numerical consistency, or publication integrity prevents pointer advancement. The system degrades to an older clearly dated message instead of publishing uncertain content.
 
+---
+
 ## End-to-End Example: From Desk Execution Notes to the Company Website
 
 The following walkthrough makes the workflow concrete. It uses a **synthetic demonstration fixture** based on the supplied project example. The names, account identifier, execution IDs, fees, returns, and portfolio commentary are sample content for testing the application. They must not be interpreted as verified performance, a client statement, an accounting record, investment research, or investment advice.
 
 This example is intentionally more difficult than a clean CSV. It contains account-level data, named issuers, detailed transaction economics, free-form commentary, performance claims, benchmark comparisons, and website copy. That makes it useful for demonstrating why DeskPulse separates raw records, deterministic calculations, AI-assisted narrative transformation, compliance validation, and public publication.
+
+---
 
 ### Step 1: The trader submits the prior-day execution history
 
@@ -332,6 +365,8 @@ The submitted fixture is useful because it demonstrates several control requirem
 - The buy and sell occurred on different trading dates, so this is a round-trip example rather than a single-day execution recap. The application must not label both legs as "yesterday's executions" unless the selected reporting window explicitly covers both dates.
 - The notes describe an opening and closing position but do not provide an arrival-price, decision-price, VWAP, or implementation-shortfall benchmark. DeskPulse therefore cannot make a best-execution claim from these fields alone.
 
+---
+
 ### Step 2: Parse, classify, and quarantine the records
 
 The ingress adapter parses the two notes into an internal record set. It retains the original text only in the encrypted quarantine zone and provides a normalized payload to the runtime. A simplified form is shown below:
@@ -379,6 +414,8 @@ The ingress adapter parses the two notes into an internal record set. It retains
 
 The signed `net_cash_amount` convention makes cash direction explicit: the purchase is a debit and the sale is a credit. The parser does not infer that the two records represent the same beneficial owner merely because the account strings match. It uses the account only inside the restricted processing boundary and replaces it with a non-reversible internal grouping token if matching is required.
 
+---
+
 ### Step 3: Apply deterministic calculations
 
 The project does not ask the model to calculate the round-trip economics. A deterministic metrics module derives them from the supplied net values:
@@ -399,6 +436,8 @@ The net realized cash difference is `HKD 4,771,382.46 - HKD 4,307,958.26 = HKD 4
 These are arithmetic results from the supplied fixture, not independently verified broker records. The difference between the gross and net return reflects the included charges and the use of net cash amounts. The module stores the formula, source fields, decimal precision, and calculation version with the job so the website statement can be traced back to deterministic inputs.
 
 A production control would also reconcile the fee schedule, settlement calendar, corporate actions, trade amendments, cancellations, and currency treatment against authorized reference data. DeskPulse does not use an AI model to certify those elements.
+
+---
 
 ### Step 4: Remove public-channel identifiers
 
@@ -426,6 +465,8 @@ Before narrative generation, the sanitization layer classifies every field accor
 
 For the public example, DeskPulse suppresses the account, execution IDs, issuer name, and ticker. The published narrative refers to a Hong Kong listed-equity position. If the organization's communications policy permits named instruments after a suitable delay and approval, the application can retain them through configuration. The default remains conservative.
 
+---
+
 ### Step 5: Generate the desk-side canonical summary
 
 The canonical English output is factual, benchmark-aware, and scoped to the supplied records:
@@ -433,6 +474,8 @@ The canonical English output is factual, benchmark-aware, and scoped to the supp
 > The supplied execution records show a completed round trip in a Hong Kong listed-equity position. The desk acquired 10,000 shares at an average execution price of HKD 430.20 and subsequently sold the same quantity at HKD 477.80. Based on the stated net debit and net credit, the position generated a net realized cash difference of HKD 463,424.20, equivalent to approximately 10.76% of the opening cash outlay. The records do not include arrival-price, VWAP, decision-price, or implementation-shortfall benchmarks, so no conclusion is made regarding best execution or market impact. Account identifiers, execution identifiers, and security-level identifiers were removed from the public message.
 
 This language uses professional trading terms without overstating what the data proves. It distinguishes realized round-trip economics from execution quality. A profitable trade can still have poor execution relative to an appropriate benchmark, while a loss-making trade can still have high-quality execution. DeskPulse keeps those concepts separate.
+
+---
 
 ### Step 6: Translate and validate all six variants
 
@@ -472,6 +515,8 @@ A compact version of the published language map looks like this:
 ```
 
 These translations are demonstration content. In production they would pass through the configured terminology, automated parity checks, and the organization's language-review process before becoming eligible for publication.
+
+---
 
 ### Step 7: Publish the validated S3 object
 
@@ -563,6 +608,8 @@ After all checks pass, DeskPulse writes the immutable object and advances the we
 
 The website can combine this execution-message object with separately governed profile or portfolio content. Keeping these data domains separate is important. Execution history comes from the DeskPulse pipeline; biography, title, mandate language, benchmark performance, and achievement claims should come from an approved content-management source rather than being inferred from trade records.
 
+---
+
 ### Step 8: The trader checks the latest company website message
 
 After the approximately three-minute processing window, the trader opens the company website. The site retrieves `latest.json`, confirms that its schema version is supported, and renders the approved language. A representative page may contain the following profile and portfolio sections alongside the new DeskPulse execution component:
@@ -603,6 +650,8 @@ The DeskPulse-owned component is the **Trading Execution Summary** generated fro
 > **Benchmark status:** Arrival price, VWAP, decision price, and implementation-shortfall benchmarks were not supplied  
 > **Privacy controls:** Account, execution, issuer, and instrument identifiers removed  
 > **Execution-quality conclusion:** Not assessed from the supplied fields
+
+---
 
 ### What the example proves
 
