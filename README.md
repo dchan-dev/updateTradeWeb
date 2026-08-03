@@ -1,4 +1,4 @@
-Title: Weekend Annoying Task Challenge: DeskPulse
+Title: Weekend Annoying Task Challenge: Trading Desk Execute Summary On Cloud, On Chain, On Air
 Tag: #productivity
 
 ## Link to App or Repo
